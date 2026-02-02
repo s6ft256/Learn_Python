@@ -1,0 +1,8 @@
+{
+  "name": "PyQuest: Mastery RPG",
+  "description": "A mobile-first educational RPG for mastering Python 3.12+ from basics to advanced professional skills with AI-driven mentoring.",
+  "version": "1.0.0",
+  "requestFramePermissions": [
+    "microphone"
+  ]
+}
