@@ -2,7 +2,6 @@
 import { GoogleGenAI, Type } from "@google/genai";
 import { Feedback } from "../types";
 
-// Always initialize GoogleGenAI inside the function where it is used to ensure the most up-to-date API key is used.
 export async function getCodeFeedback(
   challengeTitle: string,
   challengeDesc: string,
@@ -14,55 +13,59 @@ export async function getCodeFeedback(
     const response = await ai.models.generateContent({
       model: "gemini-3-flash-preview",
       contents: `
-        Analyze this Python code for a student learning the basics.
-        Mission: ${challengeTitle}
-        Goal: ${challengeDesc}
-        Reference Solution: ${expectedSolution}
-        Student's Attempt:
+        Analyze this student's Python code attempt.
+        Lesson: ${challengeTitle}
+        Instruction: ${challengeDesc}
+        Correct Reference: ${expectedSolution}
+        Student's Code:
         \`\`\`python
         ${userCode}
         \`\`\`
       `,
       config: {
-        systemInstruction: "You are a patient and friendly Python teacher for absolute beginners. Check for correctness, but focus on explaining the 'why'. If there is an error, explain it using simple analogies. Keep feedback encouraging and avoid overly complex technical jargon. Ensure the code follows Python 3.12+ standards like f-strings.",
+        systemInstruction: `You are Pixel, a friendly and slightly witty AI Python tutor for absolute beginners. 
+        Your goal is to guide them to success. 
+        1. If the code is correct, give a punchy congratulatory message and explain why it worked in 1 simple sentence. 
+        2. If it is wrong, don't just fix it. Use a simple analogy to explain the mistake (e.g. comparing variables to boxes). 
+        3. Check for indentation, colons, and spelling carefully.
+        4. Be supportive and encouraging. No matter how bad the code is, Pixel stays positive!`,
         responseMimeType: "application/json",
         responseSchema: {
           type: Type.OBJECT,
           properties: {
-            status: { type: Type.STRING, description: "correct, incorrect, or syntax-error" },
-            message: { type: Type.STRING, description: "A warm, encouraging summary" },
-            aiExplanation: { type: Type.STRING, description: "A simple, beginner-friendly explanation of the logic used" },
-            suggestion: { type: Type.STRING, description: "A small hint or a 'Pythonic' tip for improvement" }
+            status: { type: Type.STRING, enum: ["correct", "incorrect", "syntax-error"] },
+            message: { type: Type.STRING, description: "Short headline like 'Brilliant!' or 'Oops, nearly!'" },
+            aiExplanation: { type: Type.STRING, description: "A warm, helpful explanation of what happened." },
+            suggestion: { type: Type.STRING, description: "Optional: A tiny 'Pythonic' pro-tip." }
           },
           required: ["status", "message", "aiExplanation"]
         }
       }
     });
 
-    // Directly access the .text property of the GenerateContentResponse object.
     const text = response.text || "{}";
     return JSON.parse(text.trim());
   } catch (error) {
     return {
       status: "incorrect",
-      message: "The AI Mentor is taking a quick break!",
-      aiExplanation: "Don't worry, even developers run into connection issues. Try checking your logic one more time or click the Hint button!"
+      message: "Pixel is buffering...",
+      aiExplanation: "I'm having a quick digital snack. Check your code once more while I reconnect!"
     };
   }
 }
 
-// Always initialize GoogleGenAI inside the function where it is used.
 export async function getHint(challengeDesc: string, currentCode: string): Promise<string> {
   const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-  const response = await ai.models.generateContent({
-    model: "gemini-3-flash-preview",
-    contents: `The student is stuck on: "${challengeDesc}". 
-    Their code: \`\`\`python\n${currentCode}\n\`\`\`. 
-    Give a gentle, helpful hint. Do not give the answer. Use a supportive tone.`,
-    config: {
-      systemInstruction: "You are a helpful Python tutor. Your goal is to guide the student to find the answer themselves. Keep hints very short (under 20 words)."
-    }
-  });
-  // Directly access the .text property of the GenerateContentResponse object.
-  return (response.text || "").trim();
+  try {
+    const response = await ai.models.generateContent({
+      model: "gemini-3-flash-preview",
+      contents: `Student is stuck on: "${challengeDesc}". Code: "${currentCode}". Give a hint under 15 words.`,
+      config: {
+        systemInstruction: "You are Pixel, the Python tutor. Give a very short, supportive hint that points to the error without giving away the full answer. Be encouraging!"
+      }
+    });
+    return (response.text || "Try checking your indentation!").trim();
+  } catch {
+    return "Check your quotes and parentheses!";
+  }
 }
