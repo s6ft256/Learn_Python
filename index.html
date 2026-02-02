@@ -8,6 +8,12 @@
     <script src="https://cdn.tailwindcss.com"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <style>
+        @keyframes pulse-subtle {
+            0%, 100% { opacity: 1; transform: scale(1); }
+            50% { opacity: 0.9; transform: scale(0.99); }
+        }
+        .animate-pulse-subtle { animation: pulse-subtle 2s infinite ease-in-out; }
+
         body {
             background-color: #1a1c1e; /* Material Dark Surface */
             color: #e2e2e6;

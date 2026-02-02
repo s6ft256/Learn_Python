@@ -1,13 +1,13 @@
 
 import React, { useState, useEffect, useRef } from 'react';
-import { UserStats, Challenge, Feedback } from './types';
+import { UserStats, Challenge, Feedback, Pitfall } from './types';
 import { LEVELS } from './constants';
-import { getCodeFeedback, getHint } from './services/geminiService';
 import Editor from './components/Editor';
 import StatsBar from './components/StatsBar';
 import SkillNode from './components/SkillNode';
+import { getCodeFeedback } from './services/geminiService';
 
-const ADVANCE_DELAY = 4000; // 4 seconds delay before auto-advancing
+const ADVANCE_DELAY = 3000; 
 
 const App: React.FC = () => {
   const [stats, setStats] = useState<UserStats>(() => {
@@ -39,9 +39,9 @@ const App: React.FC = () => {
   }, [stats]);
 
   useEffect(() => {
-    const lastChallenge = LEVELS[stats.completedIds.length] || LEVELS[0];
-    setActiveChallenge(lastChallenge);
-    setUserCode(lastChallenge.initialCode);
+    const firstIncomplete = LEVELS.find(l => !stats.completedIds.includes(l.id)) || LEVELS[0];
+    setActiveChallenge(firstIncomplete);
+    setUserCode(firstIncomplete.initialCode);
   }, []);
 
   const handleSelectChallenge = (c: Challenge) => {
@@ -68,21 +68,67 @@ const App: React.FC = () => {
     }
   };
 
-  const handleSubmit = async () => {
+  const handleDeepScan = async () => {
     if (!activeChallenge) return;
     setIsLoading(true);
-    setFeedback(null);
-    setAiHint(null);
-
-    const result = await getCodeFeedback(
+    const aiFeedback = await getCodeFeedback(
       activeChallenge.title,
       activeChallenge.description,
       userCode,
       activeChallenge.solutionTemplate
     );
+    setFeedback(aiFeedback);
+    setIsLoading(false);
+  };
+
+  // Local validation system with pitfall detection
+  const handleSubmit = () => {
+    if (!activeChallenge) return;
+    
+    const normalize = (s: string) => s.replace(/\s+/g, ' ').trim();
+    const userNorm = normalize(userCode);
+    const solNorm = normalize(activeChallenge.solutionTemplate);
+
+    let result: Feedback;
+
+    // 1. Check for perfect match
+    if (userNorm === solNorm) {
+      result = {
+        status: 'correct',
+        message: activeChallenge.localFeedback.success.msg,
+        aiExplanation: activeChallenge.localFeedback.success.explanation
+      };
+    } 
+    // 2. Check for specific pitfalls
+    else {
+      let foundPitfall: Pitfall | undefined;
+      if (activeChallenge.localFeedback.pitfalls) {
+        foundPitfall = activeChallenge.localFeedback.pitfalls.find(p => {
+          if (p.pattern instanceof RegExp) {
+            return p.pattern.test(userCode);
+          }
+          return userCode.includes(p.pattern as string);
+        });
+      }
+
+      if (foundPitfall) {
+        result = {
+          status: 'incorrect',
+          message: foundPitfall.guidance,
+          aiExplanation: "Logic Alert!",
+          actionableStep: foundPitfall.action
+        };
+      } else {
+        result = {
+          status: 'incorrect',
+          message: "Wait, that's not quite right...",
+          aiExplanation: "Python is very picky about spelling and spaces. Your code doesn't match the mission goal yet.",
+          suggestion: "Common fix: Check your colons (:) or quotes (\")."
+        };
+      }
+    }
 
     setFeedback(result);
-    setIsLoading(false);
 
     if (result.status === 'correct') {
       const isNewCompletion = !stats.completedIds.includes(activeChallenge.id);
@@ -96,7 +142,7 @@ const App: React.FC = () => {
           
           if (activeChallenge.tier === 'Beginner') newSkills.syntax = Math.min(5, newSkills.syntax + 0.3);
           if (activeChallenge.tier === 'Intermediate') newSkills.logic = Math.min(5, newSkills.logic + 0.3);
-          if (activeChallenge.tier === 'Advanced') newSkills.oop = Math.min(5, newSkills.oop + 0.5);
+          if (activeChallenge.tier === 'Advanced') newSkills.architecture = Math.min(5, newSkills.architecture + 0.5);
 
           return { ...prev, xp: newXp, level: newLevel, completedIds: newCompleted, skills: newSkills };
         });
@@ -114,12 +160,9 @@ const App: React.FC = () => {
     }
   };
 
-  const handleGetHint = async () => {
+  const handleGetHint = () => {
     if (!activeChallenge) return;
-    setIsLoading(true);
-    const hint = await getHint(activeChallenge.description, userCode);
-    setAiHint(hint);
-    setIsLoading(false);
+    setAiHint(activeChallenge.localFeedback.hint);
   };
 
   return (
@@ -128,242 +171,189 @@ const App: React.FC = () => {
 
       <main className="flex-grow flex flex-col overflow-hidden relative">
         
-        {/* Mission View (Editor) */}
+        {/* Play Tab */}
         {activeTab === 'mission' && activeChallenge && (
           <div className="flex-grow flex flex-col overflow-hidden">
-            {/* Header: Lesson Context */}
-            <div className="px-6 py-4 bg-[#1a1c1e] border-b border-[#333538] shadow-sm">
+            {/* Mission Header */}
+            <div className="px-6 py-4 bg-[#1a1c1e] border-b border-[#333538] shadow-lg relative z-10">
               <div className="flex justify-between items-center mb-1">
-                <span className={`text-[9px] font-black uppercase tracking-[0.2em] px-2 py-0.5 rounded-sm ${activeChallenge.tier === 'Beginner' ? 'bg-emerald-500/10 text-emerald-400' : activeChallenge.tier === 'Intermediate' ? 'bg-amber-500/10 text-amber-400' : 'bg-rose-500/10 text-rose-400'}`}>
-                  {activeChallenge.tier} • Lesson {LEVELS.indexOf(activeChallenge) + 1}
+                <span className={`text-[10px] font-black uppercase tracking-widest px-2 py-0.5 rounded ${activeChallenge.tier === 'Beginner' ? 'bg-emerald-500/10 text-emerald-400' : activeChallenge.tier === 'Intermediate' ? 'bg-amber-500/10 text-amber-400' : 'bg-rose-500/10 text-rose-400'}`}>
+                   {activeChallenge.tier} • Mission {LEVELS.indexOf(activeChallenge) + 1}
                 </span>
-                <button 
-                  onClick={() => setShowGuide(!showGuide)}
-                  className="text-[10px] font-bold text-[#d0e4ff] bg-[#333538] px-3 py-1 rounded-full flex items-center gap-2 active:scale-95 transition-all"
-                >
-                  <i className={`fa-solid ${showGuide ? 'fa-xmark' : 'fa-graduation-cap'}`}></i> {showGuide ? 'CLOSE' : 'LEARN'}
+                <button onClick={() => setShowGuide(!showGuide)} className="text-[10px] font-black text-[#d0e4ff] bg-[#333538] px-3 py-1 rounded-full flex items-center gap-2">
+                   <i className="fa-solid fa-graduation-cap"></i> {showGuide ? 'HIDE' : 'GUIDE'}
                 </button>
               </div>
-              <h1 className="text-lg font-bold text-white mb-1">{activeChallenge.title}</h1>
-              <p className="text-sm text-[#c4c6cf] leading-tight font-medium">
-                {activeChallenge.description}
-              </p>
+              <h1 className="text-xl font-black text-white">{activeChallenge.title}</h1>
+              <p className="text-sm text-[#c4c6cf] mt-1 font-medium">{activeChallenge.description}</p>
             </div>
 
-            {/* Main Area: Editor + Overlays */}
-            <div className="flex-grow relative flex flex-col overflow-hidden bg-[#0f1113]">
+            {/* Editor Area */}
+            <div className="flex-grow relative flex flex-col overflow-hidden">
               <Editor code={userCode} onChange={setUserCode} />
 
-              {/* Learning Guide Overlay */}
+              {/* Guide Overlay */}
               {showGuide && (
-                <div className="absolute inset-0 bg-[#1a1c1e]/98 z-40 p-8 overflow-y-auto animate-in fade-in zoom-in-95 duration-200">
-                  <div className="max-w-md mx-auto">
-                    <h3 className="text-xl font-bold mb-6 text-[#d0e4ff]">Python Cheat Sheet</h3>
-                    <div className="space-y-8">
-                      <div className="bg-[#333538] p-4 rounded-2xl border border-white/5">
-                        <h4 className="text-xs font-bold text-emerald-400 uppercase tracking-widest mb-2">Displaying Info</h4>
-                        <p className="text-sm text-[#e2e2e6] mb-3">The <code className="text-[#d0e4ff]">print()</code> function sends data to the screen.</p>
-                        <code className="block bg-black/40 p-3 rounded-xl text-xs text-white">{'print("Hello World")'}</code>
-                      </div>
-                      <div className="bg-[#333538] p-4 rounded-2xl border border-white/5">
-                        <h4 className="text-xs font-bold text-amber-400 uppercase tracking-widest mb-2">Logic Blocks</h4>
-                        <p className="text-sm text-[#e2e2e6] mb-3">Python uses colons <code className="text-amber-400">:</code> and 4 spaces (indentation) to show nested code.</p>
-                        <code className="block bg-black/40 p-3 rounded-xl text-xs text-white leading-relaxed">{'if level > 10:\n    print("Master")'}</code>
-                      </div>
-                      <div className="bg-[#333538] p-4 rounded-2xl border border-white/5">
-                        <h4 className="text-xs font-bold text-rose-400 uppercase tracking-widest mb-2">Pro Tip</h4>
-                        <p className="text-sm text-[#e2e2e6]">Variables are names for data. Keep them lowercase and use underscores like <code className="text-white">user_score</code>.</p>
-                      </div>
+                <div className="absolute inset-0 bg-[#1a1c1e]/98 z-40 p-8 overflow-y-auto animate-in fade-in duration-200">
+                  <h3 className="text-xl font-black mb-6 text-[#d0e4ff]">Python Mini-Manual</h3>
+                  <div className="space-y-6">
+                    <div className="bg-[#333538] p-4 rounded-2xl">
+                      <h4 className="text-xs font-black text-emerald-400 uppercase mb-2">Printing</h4>
+                      <code className="text-xs">print("Text Here")</code>
                     </div>
-                    <button 
-                      onClick={() => setShowGuide(false)}
-                      className="mt-10 w-full py-4 rounded-3xl bg-[#d0e4ff] text-[#00315d] font-black text-sm shadow-xl"
-                    >
-                      GOT IT, LET'S CODE!
-                    </button>
+                    <div className="bg-[#333538] p-4 rounded-2xl">
+                      <h4 className="text-xs font-black text-amber-400 uppercase mb-2">Variables</h4>
+                      <code className="text-xs">box_name = 100</code>
+                    </div>
+                    <div className="bg-[#333538] p-4 rounded-2xl">
+                      <h4 className="text-xs font-black text-rose-400 uppercase mb-2">Lists</h4>
+                      <code className="text-xs">items = ["A", "B"]</code>
+                    </div>
                   </div>
+                  <button onClick={() => setShowGuide(false)} className="mt-8 w-full py-4 rounded-3xl bg-[#d0e4ff] text-[#00315d] font-black text-sm">BACK TO CODE</button>
                 </div>
               )}
 
-              {/* Enhanced Feedback UI */}
+              {/* Feedback UI */}
               {(feedback || aiHint) && (
-                <div className="absolute bottom-4 left-4 right-4 bg-[#2e3032] border border-white/5 p-6 rounded-[32px] animate-in slide-in-from-bottom-4 duration-500 z-30 shadow-2xl">
+                <div className="absolute bottom-4 left-4 right-4 bg-[#2e3032] p-6 rounded-[32px] animate-in slide-in-from-bottom duration-300 z-30 shadow-2xl border border-white/5">
                   {feedback && (
-                    <div className="flex flex-col gap-3">
-                      <div className={`flex items-center gap-3 font-black text-xs uppercase tracking-widest ${feedback.status === 'correct' ? 'text-emerald-400' : 'text-orange-400'}`}>
+                    <div className="flex flex-col gap-2">
+                      <div className={`flex items-center gap-3 font-black text-xs uppercase ${feedback.status === 'correct' ? 'text-emerald-400' : 'text-orange-400'}`}>
                         <div className={`w-8 h-8 rounded-full flex items-center justify-center ${feedback.status === 'correct' ? 'bg-emerald-400/20' : 'bg-orange-400/20'}`}>
-                           <i className={`fa-solid ${feedback.status === 'correct' ? 'fa-check' : 'fa-lightbulb'}`}></i>
+                          <i className={`fa-solid ${feedback.status === 'correct' ? 'fa-check' : 'fa-lightbulb'}`}></i>
                         </div>
                         {feedback.message}
                       </div>
-                      <p className="text-sm text-[#e2e2e6] leading-relaxed font-medium">
-                        {feedback.aiExplanation}
-                      </p>
                       
-                      {feedback.status === 'correct' && (
-                        <div className="flex items-center justify-between mt-2 pt-4 border-t border-white/5">
-                          <div className="flex items-center gap-2">
-                             <div className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></div>
-                             <span className="text-[10px] font-bold text-emerald-400 uppercase">Auto-advance in {countdown}s</span>
+                      <div className="flex flex-col gap-3 mt-1">
+                        <p className="text-sm text-[#e2e2e6] font-medium leading-relaxed">
+                          {feedback.aiExplanation}
+                        </p>
+                        
+                        {feedback.actionableStep && (
+                          <div className="p-3 bg-orange-400/10 rounded-2xl border border-orange-400/20 animate-pulse-subtle">
+                            <span className="text-[9px] font-black text-orange-400 uppercase block mb-1">Actionable Step:</span>
+                            <p className="text-xs text-[#d0e4ff] font-bold">{feedback.actionableStep}</p>
                           </div>
-                          <button 
-                            onClick={advanceToNextLevel}
-                            className="bg-emerald-400 text-black px-4 py-1.5 rounded-full text-[10px] font-black uppercase active:scale-95 transition-all"
-                          >
-                            Go Now
-                          </button>
+                        )}
+
+                        {feedback.status === 'correct' && (
+                          <div className="p-3 bg-emerald-400/10 rounded-2xl border border-emerald-400/20">
+                            <span className="text-[9px] font-black text-emerald-400 uppercase block mb-1">The Core Concept:</span>
+                            <p className="text-xs text-[#c4c6cf] font-medium italic">
+                              "{activeChallenge.concepts.join(' & ')}: You just mastered a key building block of modern Python."
+                            </p>
+                          </div>
+                        )}
+                      </div>
+
+                      {feedback.status === 'correct' && (
+                        <div className="mt-3 pt-3 border-t border-white/5 flex justify-between items-center">
+                          <span className="text-[10px] font-black text-emerald-400">NEXT MISSION IN {countdown}S</span>
+                          <button onClick={advanceToNextLevel} className="text-[10px] font-black bg-emerald-400 text-black px-4 py-1.5 rounded-full uppercase active:scale-95">Skip Wait</button>
                         </div>
                       )}
-
+                      
                       {feedback.status !== 'correct' && (
-                        <div className="flex gap-2 mt-2">
-                          <button onClick={() => {setFeedback(null); setAiHint(null);}} className="flex-grow py-3 rounded-2xl bg-white/5 text-[#8e9199] text-[10px] font-black uppercase border border-white/5">Try Again</button>
-                          <button onClick={handleGetHint} className="flex-grow py-3 rounded-2xl bg-[#d0e4ff]/10 text-[#d0e4ff] text-[10px] font-black uppercase border border-[#d0e4ff]/20">AI Hint</button>
+                        <div className="flex gap-2 mt-4">
+                          <button onClick={() => setFeedback(null)} className="flex-1 py-3 rounded-2xl bg-white/5 text-[10px] font-black text-[#8e9199] uppercase">Edit Code</button>
+                          <button onClick={handleDeepScan} className="flex-1 py-3 rounded-2xl bg-[#d0e4ff]/10 text-[10px] font-black text-[#d0e4ff] uppercase border border-[#d0e4ff]/20">AI Deep Scan</button>
                         </div>
                       )}
                     </div>
                   )}
-                  {aiHint && (
-                    <div className="flex flex-col gap-4">
-                      <div className="flex items-start gap-4">
-                        <div className="w-10 h-10 rounded-2xl bg-[#d0e4ff] flex items-center justify-center text-[#00315d] shadow-inner">
-                           <i className="fa-solid fa-robot"></i>
-                        </div>
-                        <p className="text-sm text-[#d0e4ff] italic leading-relaxed pt-1">
-                          "{aiHint}"
-                        </p>
+                  {aiHint && !feedback && (
+                    <div className="flex flex-col gap-3">
+                      <div className="flex items-center gap-2 text-[#d0e4ff] font-black text-[10px] uppercase">
+                        <i className="fa-solid fa-wand-magic-sparkles"></i> Guided Hint
                       </div>
-                      <button onClick={() => setAiHint(null)} className="w-full py-3 rounded-2xl bg-white/5 text-[10px] font-black uppercase text-[#8e9199]">Close Hint</button>
+                      <p className="text-sm text-[#d0e4ff] italic font-medium leading-relaxed">"{aiHint}"</p>
+                      <button onClick={() => setAiHint(null)} className="text-[10px] font-black text-[#8e9199] uppercase w-full text-center py-2 border-t border-white/5 mt-2">Close</button>
                     </div>
                   )}
                 </div>
               )}
             </div>
 
-            {/* Bottom Interaction Bar */}
-            <div className="px-6 py-4 bg-[#1a1c1e] flex gap-4 items-center border-t border-[#333538] shadow-lg">
-              <button 
-                onClick={handleGetHint}
-                className="w-14 h-14 rounded-2xl bg-[#333538] flex items-center justify-center text-[#d0e4ff] active:scale-90 transition-transform shadow-inner border border-white/5"
-                title="AI Support"
-              >
-                <i className="fa-solid fa-wand-magic-sparkles text-xl"></i>
+            {/* Actions */}
+            <div className="px-6 py-4 bg-[#1a1c1e] flex gap-4 items-center border-t border-[#333538] shadow-2xl">
+              <button onClick={handleGetHint} className="w-14 h-14 rounded-2xl bg-[#333538] flex items-center justify-center text-[#d0e4ff] active:scale-90 transition-transform shadow-inner border border-white/5">
+                <i className="fa-solid fa-lightbulb text-xl"></i>
               </button>
-              
-              <button 
-                onClick={handleSubmit}
-                disabled={isLoading || !!countdown}
-                className="flex-grow h-14 rounded-2xl bg-[#d0e4ff] text-[#00315d] font-black flex items-center justify-center gap-3 shadow-[0_8px_20px_rgba(208,228,255,0.2)] active:scale-[0.98] transition-all disabled:opacity-50 disabled:scale-100"
-              >
-                {isLoading ? (
-                  <div className="flex items-center gap-2">
-                    <i className="fa-solid fa-circle-notch animate-spin"></i>
-                    <span className="text-sm tracking-widest">COMPILING...</span>
-                  </div>
-                ) : (
-                  <div className="flex items-center gap-3">
-                    <i className="fa-solid fa-bolt-lightning text-lg"></i>
-                    <span className="text-sm tracking-widest uppercase">Check My Logic</span>
-                  </div>
-                )}
+              <button onClick={handleSubmit} disabled={!!countdown} className="flex-grow h-14 rounded-2xl bg-[#d0e4ff] text-[#00315d] font-black flex items-center justify-center gap-3 shadow-lg active:scale-95 transition-all disabled:opacity-50">
+                <i className="fa-solid fa-play"></i>
+                <span className="tracking-widest text-sm uppercase">Verify Logic</span>
               </button>
             </div>
           </div>
         )}
 
-        {/* Mission Path Browser */}
+        {/* Browser Tab */}
         {activeTab === 'browser' && (
           <div className="flex-grow flex flex-col p-6 overflow-y-auto bg-[#0f1113]">
-            <h1 className="text-3xl font-black text-white mb-2">The Path</h1>
-            <p className="text-sm text-[#8e9199] mb-10 font-medium">Progress through the levels to become a Python Master.</p>
-            
-            <div className="space-y-12 pb-20">
-              {['Beginner', 'Intermediate', 'Advanced'].map(tier => (
-                <section key={tier}>
-                  <div className="flex items-center justify-between mb-5 px-1">
-                    <h2 className={`text-[11px] font-black uppercase tracking-[0.25em] ${tier === 'Beginner' ? 'text-emerald-400' : tier === 'Intermediate' ? 'text-amber-400' : 'text-rose-400'}`}>
-                      {tier} {tier === 'Beginner' ? 'Foundation' : tier === 'Intermediate' ? 'Logic' : 'Architecture'}
-                    </h2>
-                    <span className="text-[10px] text-[#44474e] font-bold">
-                      {LEVELS.filter(l => l.tier === tier && stats.completedIds.includes(l.id)).length} / {LEVELS.filter(l => l.tier === tier).length}
-                    </span>
-                  </div>
-                  <div className="grid gap-3">
-                    {LEVELS.filter(l => l.tier === tier).map((l, index) => {
-                      const isCompleted = stats.completedIds.includes(l.id);
-                      const isActive = activeChallenge?.id === l.id;
-                      return (
-                        <button 
-                          key={l.id} 
-                          onClick={() => handleSelectChallenge(l)}
-                          className={`group p-5 rounded-[28px] border transition-all active:scale-[0.97] flex items-center gap-5 text-left ${isActive ? 'bg-[#d0e4ff] border-[#d0e4ff] text-[#00315d] shadow-xl shadow-blue-500/10' : 'bg-[#1a1c1e] border-white/5 text-[#e2e2e6] hover:bg-[#333538]'}`}
-                        >
-                          <div className={`w-10 h-10 rounded-2xl flex items-center justify-center text-xs font-black shadow-inner ${isActive ? 'bg-[#00315d] text-white' : isCompleted ? 'bg-emerald-500/10 text-emerald-400' : 'bg-[#0f1113] text-[#44474e]'}`}>
-                            {isCompleted ? <i className="fa-solid fa-check"></i> : index + 1}
-                          </div>
-                          <div className="flex-grow">
-                             <h3 className="font-black text-sm mb-0.5">{l.title}</h3>
-                             <p className={`text-[10px] font-bold ${isActive ? 'text-[#00315d]/60' : 'text-[#8e9199]'}`}>
-                               {l.concepts.slice(0, 2).join(' • ')}
-                             </p>
-                          </div>
-                          <i className={`fa-solid fa-chevron-right text-[10px] opacity-20 ${isActive ? 'text-[#00315d]' : ''}`}></i>
-                        </button>
-                      );
-                    })}
-                  </div>
-                </section>
-              ))}
+            <h1 className="text-3xl font-black mb-1">The Path</h1>
+            <p className="text-sm text-[#8e9199] mb-8 font-medium">Progress through the levels to unlock new ranks.</p>
+            <div className="space-y-4 pb-20">
+              {LEVELS.map((l, i) => {
+                const isCompleted = stats.completedIds.includes(l.id);
+                const isActive = activeChallenge?.id === l.id;
+                return (
+                  <button 
+                    key={l.id} 
+                    onClick={() => handleSelectChallenge(l)}
+                    className={`w-full p-5 rounded-[28px] border flex items-center gap-4 text-left transition-all active:scale-[0.98] ${isActive ? 'bg-[#d0e4ff] border-[#d0e4ff] text-[#00315d]' : 'bg-[#1a1c1e] border-white/5 text-white'}`}
+                  >
+                    <div className={`w-10 h-10 rounded-2xl flex items-center justify-center font-black text-xs ${isActive ? 'bg-[#00315d] text-white' : isCompleted ? 'bg-emerald-500/10 text-emerald-400' : 'bg-[#333538] text-[#44474e]'}`}>
+                      {isCompleted ? <i className="fa-solid fa-check"></i> : i + 1}
+                    </div>
+                    <div className="flex-grow">
+                      <div className="font-black text-sm">{l.title}</div>
+                      <div className={`text-[9px] font-black uppercase tracking-widest ${isActive ? 'text-[#00315d]/60' : l.tier === 'Beginner' ? 'text-emerald-400' : l.tier === 'Intermediate' ? 'text-amber-400' : 'text-rose-400'}`}>
+                        {l.tier} • {l.concepts[0]}
+                      </div>
+                    </div>
+                    <i className="fa-solid fa-chevron-right text-[10px] opacity-20"></i>
+                  </button>
+                );
+              })}
             </div>
           </div>
         )}
 
-        {/* Stats & Mastery Tab */}
+        {/* Stats Tab */}
         {activeTab === 'skills' && (
           <div className="flex-grow flex flex-col p-8 overflow-y-auto bg-[#0f1113]">
-            <h1 className="text-3xl font-black text-white mb-2">Mastery</h1>
-            <p className="text-sm text-[#8e9199] mb-12 font-medium">Your evolutionary coding metrics.</p>
-            
-            <div className="grid grid-cols-2 gap-x-8 gap-y-12">
-              <SkillNode name="Syntax" level={stats.skills.syntax} icon="fa-terminal" color="text-[#d0e4ff]" />
-              <SkillNode name="Logic" level={stats.skills.logic} icon="fa-brain" color="text-[#d0e4ff]" />
-              <SkillNode name="OOP" level={stats.skills.oop} icon="fa-cube" color="text-[#d0e4ff]" />
-              <SkillNode name="Advanced" level={stats.skills.async + stats.skills.data} icon="fa-meteor" color="text-[#d0e4ff]" />
-            </div>
-            
-            <div className="mt-16 bg-[#1a1c1e] p-8 rounded-[40px] border border-white/5 shadow-2xl">
-              <div className="flex items-center gap-4 mb-8">
-                 <div className="w-14 h-14 rounded-full bg-emerald-500/10 flex items-center justify-center text-emerald-400 text-xl shadow-inner">
-                    <i className="fa-solid fa-award"></i>
-                 </div>
-                 <div>
-                    <h3 className="font-black text-white tracking-wide">Career Stats</h3>
-                    <p className="text-xs text-[#8e9199] font-bold uppercase tracking-widest">Level {stats.level} Pythonista</p>
-                 </div>
-              </div>
-
-              <div className="space-y-6">
-                {[
-                  { label: 'Completed Missions', value: stats.completedIds.length, icon: 'fa-check-double' },
-                  { label: 'Coding Streak', value: `${stats.streak} Days`, icon: 'fa-fire', color: 'text-orange-400' },
-                  { label: 'Current Rank', value: stats.rank, icon: 'fa-trophy', color: 'text-amber-400' }
-                ].map((item, i) => (
-                  <div key={i} className="flex items-center justify-between p-1">
-                     <div className="flex items-center gap-3">
-                        <i className={`fa-solid ${item.icon} text-xs ${item.color || 'text-[#d0e4ff]'}`}></i>
-                        <span className="text-xs font-bold text-[#8e9199]">{item.label}</span>
-                     </div>
-                     <span className="text-sm font-black text-white">{item.value}</span>
-                  </div>
-                ))}
-              </div>
+            <h1 className="text-3xl font-black mb-8">Evolution</h1>
+            <div className="grid grid-cols-2 gap-y-12 gap-x-8 mb-16">
+              <SkillNode name="Syntax" level={stats.skills.syntax} icon="fa-terminal" color="text-emerald-400" />
+              <SkillNode name="Logic" level={stats.skills.logic} icon="fa-brain" color="text-amber-400" />
+              <SkillNode name="Architecture" level={stats.skills.architecture} icon="fa-layer-group" color="text-rose-400" />
+              <SkillNode name="Specialty" level={0} icon="fa-flask" color="text-blue-400" />
             </div>
 
-            <div className="mt-auto pt-16 pb-8 text-center">
-              <div className="text-[10px] font-black text-[#333538] uppercase tracking-[0.3em] mb-3">PyQuest: Learn Python RPG</div>
-              <div className="flex justify-center gap-6 text-[10px] font-bold text-[#44474e]">
-                <button className="hover:text-[#d0e4ff]">Reset Progress</button>
-                <a href="https://pyquest.app/privacy" target="_blank" rel="noopener" className="hover:text-[#d0e4ff]">Legal</a>
+            <div className="bg-[#1a1c1e] p-8 rounded-[40px] border border-white/5 shadow-2xl relative overflow-hidden">
+              <div className="absolute top-0 right-0 p-4 opacity-5">
+                 <i className="fa-brands fa-python text-6xl"></i>
+              </div>
+              <div className="flex items-center gap-4 mb-6 relative z-10">
+                <div className="w-14 h-14 rounded-full bg-emerald-500/10 flex items-center justify-center text-emerald-400 text-xl shadow-inner border border-emerald-500/20">
+                   <i className="fa-solid fa-medal"></i>
+                </div>
+                <div>
+                   <h3 className="font-black tracking-wide text-white">Current Rank</h3>
+                   <p className="text-xs text-[#d0e4ff] font-black uppercase tracking-widest">{stats.rank}</p>
+                </div>
+              </div>
+              <div className="space-y-4 relative z-10">
+                <div className="flex justify-between text-[10px] font-black uppercase tracking-widest text-[#8e9199]">
+                  <span>XP Gained</span>
+                  <span className="text-white">{stats.xp} pts</span>
+                </div>
+                <div className="flex justify-between text-[10px] font-black uppercase tracking-widest text-[#8e9199]">
+                  <span>Missions Cleared</span>
+                  <span className="text-white">{stats.completedIds.length}</span>
+                </div>
               </div>
             </div>
           </div>
@@ -371,39 +361,39 @@ const App: React.FC = () => {
 
       </main>
 
-      {/* Android/iOS Tab Navigation */}
-      <nav className="h-24 bg-[#1a1c1e] border-t border-[#333538] flex items-center justify-around px-8 pb-4 shadow-[0_-10px_30px_rgba(0,0,0,0.3)]">
+      {/* Nav */}
+      <nav className="h-24 bg-[#1a1c1e] border-t border-[#333538] flex items-center justify-around px-8 pb-4 shadow-2xl relative z-50">
         {[
           { id: 'mission', icon: 'fa-code', label: 'Play' },
-          { id: 'browser', icon: 'fa-compass', label: 'Path' },
-          { id: 'skills', icon: 'fa-chart-pie', label: 'Stats' }
+          { id: 'browser', icon: 'fa-map-signs', label: 'Levels' },
+          { id: 'skills', icon: 'fa-chart-line', label: 'Stats' }
         ].map(tab => (
           <button 
             key={tab.id}
             onClick={() => setActiveTab(tab.id as any)}
-            className={`flex flex-col items-center gap-2 transition-all duration-300 ${activeTab === tab.id ? 'text-[#d0e4ff] -translate-y-1' : 'text-[#44474e]'}`}
+            className={`flex flex-col items-center gap-2 transition-all duration-200 ${activeTab === tab.id ? 'text-[#d0e4ff] -translate-y-1 scale-110' : 'text-[#44474e]'}`}
           >
-            <div className={`w-12 h-12 rounded-2xl flex items-center justify-center transition-all ${activeTab === tab.id ? 'bg-[#d0e4ff]/10' : ''}`}>
+            <div className={`w-12 h-12 rounded-2xl flex items-center justify-center transition-all ${activeTab === tab.id ? 'bg-[#d0e4ff]/10 shadow-lg' : ''}`}>
               <i className={`fa-solid ${tab.icon} text-xl`}></i>
             </div>
-            <span className="text-[9px] font-black uppercase tracking-[0.15em]">{tab.label}</span>
+            <span className="text-[9px] font-black uppercase tracking-widest">{tab.label}</span>
           </button>
         ))}
       </nav>
 
-      {/* Global Processing State */}
+      {/* Deep Scan Loader */}
       {isLoading && (
-        <div className="fixed inset-0 bg-black/70 backdrop-blur-md z-[200] flex items-center justify-center p-12 text-center animate-in fade-in duration-300">
-           <div className="bg-[#1a1c1e] p-10 rounded-[48px] shadow-2xl flex flex-col items-center border border-white/5">
-              <div className="relative w-16 h-16 mb-6">
-                <div className="absolute inset-0 border-4 border-[#d0e4ff]/10 rounded-full"></div>
-                <div className="absolute inset-0 border-4 border-[#d0e4ff] border-t-transparent rounded-full animate-spin"></div>
-                <div className="absolute inset-0 flex items-center justify-center">
-                   <i className="fa-brands fa-python text-2xl text-[#d0e4ff]"></i>
-                </div>
-              </div>
-              <p className="text-[#d0e4ff] text-[10px] font-black tracking-[0.2em] uppercase">Consulting AI Mentor...</p>
-           </div>
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-md z-[200] flex items-center justify-center animate-in fade-in duration-300">
+          <div className="bg-[#1a1c1e] p-10 rounded-[48px] flex flex-col items-center gap-6 border border-[#d0e4ff]/20 shadow-[0_0_50px_rgba(208,228,255,0.1)]">
+            <div className="relative">
+              <div className="w-12 h-12 border-4 border-[#d0e4ff]/10 rounded-full"></div>
+              <div className="w-12 h-12 border-4 border-[#d0e4ff] border-t-transparent rounded-full animate-spin absolute top-0 left-0"></div>
+            </div>
+            <div className="text-center">
+              <p className="text-[#d0e4ff] text-[10px] font-black uppercase tracking-[0.3em] mb-1">AI Deep Scan</p>
+              <p className="text-[#44474e] text-[9px] font-bold uppercase">Parsing Syntax Tree...</p>
+            </div>
+          </div>
         </div>
       )}
     </div>
